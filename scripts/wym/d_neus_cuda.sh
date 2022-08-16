@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=7 python main_dnerf_neus.py data/dnerf/jumpingjacks --workspace trial_dnerf_jumpingjacks -O --bound 1.0 --scale 0.8 --dt_gamma 0

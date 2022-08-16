@@ -2,6 +2,39 @@ from nerf.utils import *
 from nerf.utils import Trainer as _Trainer
 
 
+def extract_fields(time, bound_min, bound_max, resolution, query_func, S=128):
+
+    X = torch.linspace(bound_min[0], bound_max[0], resolution).split(S)
+    Y = torch.linspace(bound_min[1], bound_max[1], resolution).split(S)
+    Z = torch.linspace(bound_min[2], bound_max[2], resolution).split(S)
+
+    u = np.zeros([resolution, resolution, resolution], dtype=np.float32)
+    with torch.no_grad():
+        for xi, xs in enumerate(X):
+            for yi, ys in enumerate(Y):
+                for zi, zs in enumerate(Z):
+                    xx, yy, zz = custom_meshgrid(xs, ys, zs)
+                    pts = torch.cat([xx.reshape(-1, 1), yy.reshape(-1, 1), zz.reshape(-1, 1)], dim=-1) # [S, 3]
+                    val = query_func(pts,time).reshape(len(xs), len(ys), len(zs)).detach().cpu().numpy() # [S, 1] --> [x, y, z]
+                    u[xi * S: xi * S + len(xs), yi * S: yi * S + len(ys), zi * S: zi * S + len(zs)] = val
+    return u
+
+
+def extract_geometry(time, bound_min, bound_max, resolution, threshold, query_func):
+    #print('threshold: {}'.format(threshold))
+    u = extract_fields(time, bound_min, bound_max, resolution, query_func)
+
+    #print(u.shape, u.max(), u.min(), np.percentile(u, 50))
+    
+    vertices, triangles = mcubes.marching_cubes(u, threshold)
+
+    b_max_np = bound_max.detach().cpu().numpy()
+    b_min_np = bound_min.detach().cpu().numpy()
+
+    vertices = vertices / (resolution - 1.0) * (b_max_np - b_min_np)[None, :] + b_min_np[None, :]
+    return vertices, triangles
+
+
 class Trainer(_Trainer):
     def __init__(self, 
                  name, # name of this experiment
@@ -22,7 +55,7 @@ class Trainer(_Trainer):
                  workspace='workspace', # workspace to save logs & ckpts
                  best_mode='min', # the smaller/larger result, the better
                  use_loss_as_metric=True, # use loss as the first metric
-                 report_metric_at_train=False, # also report metrics at training
+                 report_metric_at_train=True, # also report metrics at training
                  use_checkpoint="latest", # which ckpt to use at init time
                  use_tensorboardX=True, # whether to use tensorboard for logging
                  scheduler_update_every_step=False, # whether to call scheduler.step() after every train step
@@ -114,11 +147,24 @@ class Trainer(_Trainer):
 
         loss = loss.mean()
 
+        statistics_dict = {}
+        statistics_dict['rgb_loss'] = loss.item()
         # deform regularization
         if 'deform' in outputs and outputs['deform'] is not None:
-            loss = loss + 1e-3 * outputs['deform'].abs().mean()
+            loss += 1e-3 * outputs['deform'].abs().mean()
+            statistics_dict['deform'] = outputs['deform'].abs().mean()
         
-        return pred_rgb, gt_rgb, loss
+        if 'eikonal_loss' in outputs.keys():
+            eikonal_loss = outputs['eikonal_loss'] 
+            # import pdb
+            # pdb.set_trace()
+            # if self.global_step >= 1000:
+            #     loss += 0.1 * eikonal_loss
+            # loss += 1.0 * eikonal_loss
+            # loss += 0.001 * eikonal_loss
+            statistics_dict['ek_loss'] = eikonal_loss.item()
+
+        return pred_rgb, gt_rgb, loss, statistics_dict
 
     def eval_step(self, data):
 
@@ -218,7 +264,7 @@ class Trainer(_Trainer):
 
         return outputs        
 
-    def save_mesh(self, time, save_path=None, resolution=256, threshold=10):
+    def save_mesh(self, query_func, time, save_path=None, resolution=256, threshold=10):
         # time: scalar in [0, 1]
         time = torch.FloatTensor([[time]]).to(self.device)
 
@@ -229,13 +275,8 @@ class Trainer(_Trainer):
 
         os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
-        def query_func(pts):
-            with torch.no_grad():
-                with torch.cuda.amp.autocast(enabled=self.fp16):
-                    sigma = self.model.density(pts.to(self.device), time)['sigma']
-            return sigma
 
-        vertices, triangles = extract_geometry(self.model.aabb_infer[:3], self.model.aabb_infer[3:], resolution=resolution, threshold=threshold, query_func=query_func)
+        vertices, triangles = extract_geometry(time, self.model.aabb_infer[:3], self.model.aabb_infer[3:], resolution=resolution, threshold=threshold, query_func=query_func)
 
         mesh = trimesh.Trimesh(vertices, triangles, process=False) # important, process=True leads to seg fault...
         mesh.export(save_path)
