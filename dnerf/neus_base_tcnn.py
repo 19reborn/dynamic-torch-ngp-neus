@@ -35,7 +35,24 @@ class SDFNet(nn.Module):
 
         self.encoding = encoding
 
+        # if encoding == 'hashgrid':
+        #     self.encoder = tcnn.Encoding(
+        #         n_input_dims=3,
+        #         encoding_config={
+        #             "otype": "HashGrid",
+        #             "n_levels": 16,
+        #             "n_features_per_level": 2,
+        #             "log2_hashmap_size": 19,
+        #             "base_resolution": 16,
+        #             "per_level_scale": per_level_scale,
+        #             # "interpolation": "Smoothstep" 
+        #         },
+        #     )
+        #     self.in_dim = 32
+        # else:
         self.encoder, self.in_dim = get_encoder(encoding, desired_resolution=2048 * bound)
+        # self.encoder, self.in_dim = get_encoder(encoding, per_level_scale = per_level_scale)
+
         # if encoder == None:
         #     if encoding == 'HashGrid':
         #         self.encoder = tcnn.Encoding(
@@ -121,9 +138,14 @@ class SDFNet(nn.Module):
         #     h = torch.cat([x_1,x_2],dim=-1)
             # h = torch.cat([x_1],dim=-1)
 
-        x = self.encoder(x, bound=self.bound)
-        h = x
-
+        # if self.encoding == 'hashgrid':
+        # h = (x + self.bound) / (2 * self.bound) # to [0, 1]
+        # h = self.encoder(h)
+        # else:
+        h = self.encoder(x, bound=self.bound)
+        
+        if not self.opt.fp16:
+            h = h.float()
         for l in range(self.num_layers):
             h = self.sdf_net[l](h)
             if l != self.num_layers - 1:
@@ -181,8 +203,10 @@ class ColorNet(nn.Module):
                 "degree": 4,
             },
         )
-
-        self.in_dim_dir = self.encoder_dir.n_output_dims
+        if self.opt.not_use_viewdirs:
+            self.in_dim_dir = 0
+        else:
+            self.in_dim_dir = self.encoder_dir.n_output_dims
         
         self.in_dim_pos = 3
  
@@ -219,16 +243,19 @@ class ColorNet(nn.Module):
             view_dirs = view_dirs[mask]
             feature_vectors = feature_vectors[mask]
             
-        view_dirs = (view_dirs + 1) / 2 # tcnn SH encoding requires inputs to be in [0, 1]
-        view_dirs = self.encoder_dir(view_dirs)
         # if self.encoder != None:
         #     points = (points + self.bound) / (2 * self.bound) # to [0, 1]
         #     points = self.encoder(points)           
 
 
         rendering_input = None
+        if self.opt.not_use_viewdirs:
+            rendering_input = torch.cat([points, normals, feature_vectors], dim=-1)
+        else:
+            view_dirs = (view_dirs + 1) / 2 # tcnn SH encoding requires inputs to be in [0, 1]
+            view_dirs = self.encoder_dir(view_dirs)
 
-        rendering_input = torch.cat([points, view_dirs, normals, feature_vectors], dim=-1)
+            rendering_input = torch.cat([points, view_dirs, normals, feature_vectors], dim=-1)
 
 
         h = rendering_input

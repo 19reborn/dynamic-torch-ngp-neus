@@ -324,9 +324,22 @@ class NeuSRenderer(nn.Module):
 
         inv_s = self.deviation(torch.zeros([1, 3], device=device).to(device))[:, :1].clip(1e-6, 1e6)           # Single parameter
         inv_s = inv_s.expand(batch_size * n_samples, 1)
+        can_pts = pts + deform
+
+        if self.opt.canonical_direction:
+                # dirs = self.feature_net.vector_posed_to_canonical(dirs,can_pts)
+            can_pts = can_pts.reshape(batch_size, n_samples, 3)
+            dirs = can_pts[:,1:,:] - can_pts[:,0:-1,:]
+            dirs += 1e-7
+            dirs = torch.cat([dirs,dirs[:,-1,:].unsqueeze(1)], dim = 1)
+            dirs = F.normalize(dirs,p=2,dim=-1).reshape(-1,3)
+            can_pts = can_pts.reshape(-1, 3)
+            # can_dists = torch.norm(dirs, p=2, dim=-1)
+            # dirs = dirs / can_dists.unsqueeze(-1)
 
         # true_cos = (dirs * gradients).sum(-1, keepdim=True)
         true_cos = (dirs * F.normalize(gradients,p=2,dim=-1)).sum(-1, keepdim=True)
+
         # "cos_anneal_ratio" grows from 0 to 1 in the beginning training iterations. The anneal strategy below makes
         # the cos value "not dead" at the beginning training iterations, for better convergence.
         cos_anneal_ratio = self.get_cos_anneal_ratio()
@@ -361,7 +374,10 @@ class NeuSRenderer(nn.Module):
 
         # sampled_color = self.color(pts, gradients, dirs, feature_vector, mask = mask.reshape(-1)).reshape(batch_size, n_samples, 3)
         # sampled_color = self.color(pts, gradients, dirs, feature_vector).reshape(batch_size, n_samples, 3)
-        sampled_color = self.color(pts, F.normalize(gradients,p=2,dim=-1), dirs, feature_vector).reshape(batch_size, n_samples, 3)
+        # sampled_color = self.color(pts, F.normalize(gradients,p=2,dim=-1), dirs, feature_vector).reshape(batch_size, n_samples, 3)
+        # sampled_color = self.color(can_pts, F.normalize(gradients,p=2,dim=-1), torch.ones_like(dirs), feature_vector).reshape(batch_size, n_samples, 3)
+        sampled_color = self.color(can_pts, F.normalize(gradients,p=2,dim=-1), dirs, feature_vector).reshape(batch_size, n_samples, 3)
+        # sampled_color = self.color(can_pts, F.normalize(gradients,p=2,dim=-1), feature_vector).reshape(batch_size, n_samples, 3)
 
         # from torchviz import make_dot
 

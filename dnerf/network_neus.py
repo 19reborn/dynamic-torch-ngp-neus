@@ -13,8 +13,8 @@ from .neus_base_tcnn import SDFNet, ColorNet, SingleVarianceNet
 class NeusNetwork(NeuSRenderer):
     def __init__(self,
                  opt,
-                 encoding="tiledgrid",
-                #  encoding="hashgrid",
+                #  encoding="tiledgrid",
+                 encoding="hashgrid",
                  encoding_dir="sphere_harmonics",
                  encoding_time="frequency",
                  encoding_deform="frequency", # "hashgrid" seems worse
@@ -148,20 +148,36 @@ class NeusNetwork(NeuSRenderer):
         return sdf
                
     def sdf_with_gradients(self, x, t):
-        with torch.enable_grad():
-            x.requires_grad_(True)
+        if self.opt.canonical_direction:
             deform = self.get_deform(x, t)
             x_deformed = x + deform
-            sdf, geo_feat = self.sdf_network.forward(x_deformed)
-            gradients = torch.autograd.grad(
-                sdf,
-                x,
-                torch.ones_like(sdf, device=x.device),
-                create_graph=True,
-                retain_graph=True,
-                only_inputs=True)[0]
-        gradients = F.normalize(gradients, p=2, dim =-1)
-        return sdf, gradients, geo_feat, deform
+            with torch.enable_grad():
+                x_deformed.requires_grad_(True)
+                sdf, geo_feat = self.sdf_network.forward(x_deformed)
+                gradients = torch.autograd.grad(
+                    sdf,
+                    x_deformed,
+                    torch.ones_like(sdf, device=x_deformed.device),
+                    create_graph=True,
+                    retain_graph=True,
+                    only_inputs=True)[0]
+            # gradients = F.normalize(gradients, p=2, dim =-1)
+            return sdf, gradients, geo_feat, deform
+        else:
+            with torch.enable_grad():
+                x.requires_grad_(True)
+                deform = self.get_deform(x, t)
+                x_deformed = x + deform
+                sdf, geo_feat = self.sdf_network.forward(x_deformed)
+                gradients = torch.autograd.grad(
+                    sdf,
+                    x,
+                    torch.ones_like(sdf, device=x.device),
+                    create_graph=True,
+                    retain_graph=True,
+                    only_inputs=True)[0]
+            gradients = F.normalize(gradients, p=2, dim =-1)
+            return sdf, gradients, geo_feat, deform
         # return sdf, gradients.detach(), geo_feat
 
     def color(self, points, normals, view_dirs, feature_vectors, mask=None):
